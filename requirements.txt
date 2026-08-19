@@ -1,0 +1,8 @@
+PyQt5==5.15.10
+mss==9.0.1
+Pillow==10.4.0
+pynput==1.7.6
+keyboard==0.13.5
+python-docx==1.1.0
+pyinstaller==6.6.0
+pywin32==306

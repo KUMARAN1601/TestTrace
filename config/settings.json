@@ -1,0 +1,13 @@
+{
+  "output_dir": "./output",
+  "auto_capture_on_click": true,
+  "capture_delay_ms": 200,
+  "hotkey_capture": "F8",
+  "hotkey_stop": "F9",
+  "hotkey_pause": "F10",
+  "highlight_color": "#FF0000",
+  "highlight_opacity": 0.3,
+  "tester_name": "Kumaran",
+  "last_module": "Auth",
+  "last_environment": "SIT"
+}
