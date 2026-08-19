@@ -19,13 +19,13 @@ class ReportGenerator:
         """Initialize report generator."""
         pass
     
-    def generate(self, session: TestSession, output_dir: str = "./output") -> str:
+    def generate(self, session: TestSession, output_dir: str = None) -> str:
         """
         Generate DOCX evidence report from test session.
         
         Args:
             session: Completed TestSession with steps
-            output_dir: Directory to save the report
+            output_dir: Directory to save the report (defaults to user's Downloads folder)
             
         Returns:
             Path to generated DOCX file
@@ -34,7 +34,35 @@ class ReportGenerator:
             Exception: If report generation fails
         """
         try:
-            # Create output directory
+            # Use Downloads folder if no output_dir specified
+            if output_dir is None or output_dir == "./output":
+                # Get user's Downloads folder
+                if os.name == 'nt':  # Windows
+                    import ctypes
+                    from ctypes import wintypes
+                    
+                    # Get Downloads folder path on Windows
+                    CSIDL_PERSONAL = 5  # My Documents
+                    CSIDL_DOWNLOADS = 0x0028  # Downloads folder
+                    
+                    # Try to get Downloads folder
+                    try:
+                        buffer = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+                        ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_DOWNLOADS, 0, 0, buffer)
+                        output_dir = buffer.value
+                    except:
+                        # Fallback to Documents folder if Downloads not available
+                        try:
+                            ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_PERSONAL, 0, 0, buffer)
+                            output_dir = buffer.value
+                        except:
+                            # Last resort fallback
+                            output_dir = os.path.expanduser("~/Downloads")
+                else:
+                    # macOS and Linux
+                    output_dir = os.path.expanduser("~/Downloads")
+            
+            # Create output directory if it doesn't exist
             os.makedirs(output_dir, exist_ok=True)
             
             # Generate filename

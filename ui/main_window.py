@@ -304,9 +304,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             
-            # Generate report
+            # Generate report (saves to Downloads folder by default)
             generator = ReportGenerator()
-            report_path = generator.generate(session, self.settings.get("output_dir", "./output"))
+            output_dir = self.settings.get("output_dir")
+            report_path = generator.generate(session, output_dir)
             
             # Verify file was created
             if not os.path.exists(report_path):
@@ -417,10 +418,40 @@ class MainWindow(QMainWindow):
         
         layout.addLayout(button_layout)
         
+        # Show dialog and wait for user action
         dialog.exec_()
+        
+        # After dialog closes, exit the application
+        self._cleanup_and_exit()
+    
+    def _cleanup_and_exit(self) -> None:
+        """Clean up resources and exit the application."""
+        try:
+            # Stop hotkey monitoring
+            if hasattr(self, 'hotkey_thread'):
+                self.hotkey_thread.stop()
+                self.hotkey_thread.wait(1000)  # Wait up to 1 second
+            
+            # Hide control panel
+            self.control_panel.hide()
+            
+            # Hide tray icon
+            if hasattr(self, 'tray_icon'):
+                self.tray_icon.hide()
+            
+            # Close main window
+            self.close()
+            
+            # Quit application
+            QApplication.instance().quit()
+            
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+            # Force quit even if cleanup fails
+            QApplication.instance().quit()
     
     def _open_report_document(self, report_path: str, dialog) -> None:
-        """Open the generated Word document."""
+        """Open the generated Word document and close application."""
         try:
             if sys.platform == 'win32':
                 os.startfile(report_path)
@@ -431,6 +462,7 @@ class MainWindow(QMainWindow):
                 import subprocess
                 subprocess.Popen(['xdg-open', report_path])
             
+            # Close dialog
             dialog.accept()
             
         except Exception as e:
@@ -439,6 +471,7 @@ class MainWindow(QMainWindow):
                 "Cannot Open Document",
                 f"Failed to open Word document:\n{str(e)}\n\nPlease open it manually from:\n{report_path}"
             )
+            # Don't exit on error, let user handle it
     
     def _open_output_folder(self, report_path: str, dialog) -> None:
         """Open the output folder in File Explorer."""
