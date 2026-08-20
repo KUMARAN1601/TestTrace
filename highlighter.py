@@ -380,10 +380,8 @@ class Highlighter(QDialog):
                 result="Pass"
             )
             
-            # Add to session
-            self.current_session.add_step(step)
-            
-            # Emit confirmed signal
+            # Emit confirmed signal - main_window will add step to session
+            # DO NOT add here to prevent duplicate evidence in report
             self.confirmed.emit(step)
             
             # Close the highlighter safely
