@@ -33,6 +33,7 @@ class ControlPanel(QWidget):
         self.step_count = 0
         self.elapsed_seconds = 0
         self.drag_position = None
+        self.main_window = None  # Will be set by MainWindow
         
         # Timer for session duration
         self.timer = QTimer()
@@ -232,12 +233,20 @@ class ControlPanel(QWidget):
             event.ignore()
     
     def mouseReleaseEvent(self, event) -> None:
-        """Complete window dragging."""
+        """Complete window dragging and notify main window of position change."""
         if event.button() == Qt.LeftButton:
             # Reset drag position
             self.drag_position = None
             # Change cursor back to open hand
             self.setCursor(Qt.OpenHandCursor)
+            
+            # Notify main window to update bounds for click filtering
+            if self.main_window and hasattr(self.main_window, '_update_control_panel_bounds'):
+                try:
+                    self.main_window._update_control_panel_bounds()
+                except Exception as e:
+                    print(f"Failed to notify main window of position change: {e}")
+            
             event.accept()
         else:
             event.ignore()

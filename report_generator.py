@@ -15,9 +15,14 @@ from session_model import TestSession
 class ReportGenerator:
     """Generates structured Word documents from test sessions."""
     
-    def __init__(self):
-        """Initialize report generator."""
-        pass
+    def __init__(self, base_dir: str = None):
+        """
+        Initialize report generator.
+        
+        Args:
+            base_dir: Base directory for the application (for .exe support)
+        """
+        self.base_dir = base_dir or os.path.dirname(os.path.abspath(__file__))
     
     def generate(self, session: TestSession, output_dir: str = None) -> str:
         """
@@ -34,36 +39,23 @@ class ReportGenerator:
             Exception: If report generation fails
         """
         try:
-            # Use Downloads folder if no output_dir specified
+            # Use local output folder next to .exe
             if output_dir is None or output_dir == "./output":
-                # Get user's Downloads folder
-                if os.name == 'nt':  # Windows
-                    import ctypes
-                    from ctypes import wintypes
-                    
-                    # Get Downloads folder path on Windows
-                    CSIDL_PERSONAL = 5  # My Documents
-                    CSIDL_DOWNLOADS = 0x0028  # Downloads folder
-                    
-                    # Try to get Downloads folder
-                    try:
-                        buffer = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
-                        ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_DOWNLOADS, 0, 0, buffer)
-                        output_dir = buffer.value
-                    except:
-                        # Fallback to Documents folder if Downloads not available
-                        try:
-                            ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_PERSONAL, 0, 0, buffer)
-                            output_dir = buffer.value
-                        except:
-                            # Last resort fallback
-                            output_dir = os.path.expanduser("~/Downloads")
-                else:
-                    # macOS and Linux
-                    output_dir = os.path.expanduser("~/Downloads")
+                output_dir = os.path.join(self.base_dir, "output")
             
             # Create output directory if it doesn't exist
             os.makedirs(output_dir, exist_ok=True)
+            
+            # DEBUG: Log session info
+            print(f"\n=== REPORT GENERATION DEBUG ===")
+            print(f"Session ID: {session.session_id}")
+            print(f"Test Case: {session.tc_id}")
+            print(f"Total steps in session: {len(session.steps)}")
+            for i, step in enumerate(session.steps):
+                print(f"  Step {i+1}: {step.description} - {step.result}")
+                print(f"    Screenshot: {step.screenshot_path}")
+                print(f"    Annotated: {step.annotated_path}")
+            print(f"===============================\n")
             
             # Generate filename
             date_str = datetime.now().strftime("%Y%m%d")

@@ -66,20 +66,29 @@ class HotkeyThread(QThread):
 class MainWindow(QMainWindow):
     """Main application window and controller."""
     
-    def __init__(self):
-        """Initialize main window."""
+    def __init__(self, base_dir: str = None):
+        """
+        Initialize main window.
+        
+        Args:
+            base_dir: Base directory for the application (for .exe support)
+        """
         super().__init__()
         self.setWindowTitle("TestTrace Recorder")
         self.setGeometry(100, 100, 800, 600)
         
+        # Store base directory
+        self.base_dir = base_dir or os.path.dirname(os.path.abspath(__file__))
+        
         # Load settings
-        self.settings_path = "config/settings.json"
+        self.settings_path = os.path.join(self.base_dir, "config", "settings.json")
         self.settings = self._load_settings()
         
-        # Initialize components
-        self.recorder = Recorder(self.settings_path)
+        # Initialize components with base_dir
+        self.recorder = Recorder(self.settings_path, base_dir=self.base_dir)
         self.control_panel = ControlPanel()
-        self.highlighter = Highlighter()
+        self.control_panel.main_window = self  # Set reference to main window
+        self.highlighter = Highlighter(base_dir=self.base_dir)
         self.current_session: TestSession = None
         self.pending_step: TestStep = None
         
@@ -253,6 +262,9 @@ class MainWindow(QMainWindow):
             from PyQt5.QtWidgets import QApplication
             QApplication.processEvents()
             
+            # Set control panel bounds for click filtering
+            self._update_control_panel_bounds()
+            
             try:
                 self.tray_icon.showMessage(
                     "TestTrace Recorder",
@@ -277,9 +289,24 @@ class MainWindow(QMainWindow):
         if not self.recorder.is_recording:
             return
         
-        # Stop recorder
+        # Stop recorder and get session
         session = self.recorder.stop()
         self.control_panel.stop_recording()
+        
+        # DEBUG: Verify session data
+        print(f"\n=== STOP RECORDING DEBUG ===")
+        print(f"Session from recorder.stop(): {session}")
+        print(f"self.current_session: {self.current_session}")
+        print(f"Are they the same object? {session is self.current_session}")
+        if session:
+            print(f"Steps in recorder session: {len(session.steps)}")
+            for i, step in enumerate(session.steps):
+                print(f"  Step {i+1}: {step.description} - {step.result}")
+        if self.current_session:
+            print(f"Steps in current_session: {len(self.current_session.steps)}")
+            for i, step in enumerate(self.current_session.steps):
+                print(f"  Step {i+1}: {step.description} - {step.result}")
+        print(f"============================\n")
         
         if not session or not session.steps:
             QMessageBox.information(
@@ -304,8 +331,8 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             
-            # Generate report (saves to Downloads folder by default)
-            generator = ReportGenerator()
+            # Generate report (saves to local output folder by default)
+            generator = ReportGenerator(base_dir=self.base_dir)
             output_dir = self.settings.get("output_dir")
             report_path = generator.generate(session, output_dir)
             
@@ -499,24 +526,17 @@ class MainWindow(QMainWindow):
     
     @pyqtSlot()
     def _on_manual_capture(self) -> None:
-        """Handle manual capture hotkey - with toast notification."""
+        """Handle manual capture hotkey (F8) - NO TOAST."""
         if self.recorder.is_recording:
             self.recorder.manual_capture()
-            # Show brief "Action Captured" toast notification
-            try:
-                self.tray_icon.showMessage(
-                    "TestTrace Recorder",
-                    "✓ Action Captured",
-                    QSystemTrayIcon.Information,
-                    1000  # 1 second duration
-                )
-            except Exception as e:
-                print(f"Toast notification error: {e}")
     
     @pyqtSlot()
     def _on_highlight_evidence(self) -> None:
         """Handle highlight evidence button click - ONLY EXPLICIT TRIGGER."""
         if self.recorder.is_recording:
+            # PAUSE mouse listener during highlight UI interaction
+            self.recorder.pause_listener()
+            
             # Trigger highlighter in manual mode
             self.highlighter.show_for_manual_highlight(self.current_session)
     
@@ -524,6 +544,7 @@ class MainWindow(QMainWindow):
     def _on_step_captured(self, step: TestStep) -> None:
         """
         Handle step captured event - show highlighter for annotation.
+        ONLY for manual captures (F8) - auto-captures are silent.
         
         Args:
             step: Captured TestStep with screenshot
@@ -531,18 +552,7 @@ class MainWindow(QMainWindow):
         # Store pending step
         self.pending_step = step
         
-        # Show brief "Action Captured" toast notification (non-blocking)
-        try:
-            self.tray_icon.showMessage(
-                "TestTrace Recorder",
-                "✓ Action Captured",
-                QSystemTrayIcon.Information,
-                1000  # 1 second duration
-            )
-        except Exception as e:
-            print(f"Toast notification error: {e}")
-        
-        # Show highlighter for annotation
+        # Show highlighter for annotation (ONLY for manual F8 captures)
         self.highlighter.show_step(step)
     
     @pyqtSlot(TestStep)
@@ -560,6 +570,9 @@ class MainWindow(QMainWindow):
         
         self.pending_step = None
         
+        # RESUME mouse listener after highlight action completes
+        self.recorder.resume_listener()
+        
         # Ensure control panel stays visible and active after highlighting
         # Use QTimer to delay slightly so dialog can close first
         from PyQt5.QtCore import QTimer
@@ -576,11 +589,30 @@ class MainWindow(QMainWindow):
         # Process events to ensure UI updates
         from PyQt5.QtWidgets import QApplication
         QApplication.processEvents()
+        
+        # Update control panel bounds in case it moved
+        self._update_control_panel_bounds()
+    
+    def _update_control_panel_bounds(self) -> None:
+        """Update the control panel bounding box in the recorder for click filtering."""
+        try:
+            geometry = self.control_panel.geometry()
+            self.recorder.set_control_panel_rect(
+                geometry.x(),
+                geometry.y(),
+                geometry.width(),
+                geometry.height()
+            )
+        except Exception as e:
+            print(f"Failed to update control panel bounds: {e}")
     
     @pyqtSlot()
     def _on_step_skipped(self) -> None:
         """Handle step annotation skipped."""
         self.pending_step = None
+        
+        # RESUME mouse listener after highlight action is cancelled
+        self.recorder.resume_listener()
         
         # Ensure control panel stays visible after skipping
         from PyQt5.QtCore import QTimer

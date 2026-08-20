@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from typing import Optional
 from PyQt5.QtCore import QObject, pyqtSignal, QThread
-from PIL import Image
+from PIL import Image, ImageDraw
 import mss
 import mss.tools
 from pynput import mouse
@@ -23,24 +23,56 @@ class Recorder(QObject):
     
     step_captured = pyqtSignal(TestStep)
     error_occurred = pyqtSignal(str)
+    click_detected = pyqtSignal(int, int)  # Thread-safe signal for mouse clicks (x, y)
     
-    def __init__(self, settings_path: str = "config/settings.json"):
+    def __init__(self, settings_path: str = "config/settings.json", base_dir: str = None):
         """
         Initialize recorder with settings.
         
         Args:
             settings_path: Path to settings JSON file
+            base_dir: Base directory for the application (for .exe support)
         """
         super().__init__()
-        self.settings_path = settings_path
+        self.base_dir = base_dir or os.path.dirname(os.path.abspath(__file__))
+        self.settings_path = settings_path if os.path.isabs(settings_path) else os.path.join(self.base_dir, settings_path)
         self.settings = self._load_settings()
         
         self.session: Optional[TestSession] = None
         self.is_recording = False
         self.mouse_listener: Optional[mouse.Listener] = None
+        self.listener_paused = False  # Flag to pause listener during UI actions
         self.session_folder = ""
         self.step_counter = 0
         self.last_capture_time = 0
+        self.cursor_image = self._create_cursor_image()
+        self.control_panel_rect = None  # Will store control panel bounds
+        
+        # Connect click signal to handler (thread-safe bridge)
+        self.click_detected.connect(self._handle_click_on_main_thread)
+    
+    def pause_listener(self) -> None:
+        """Pause the mouse listener temporarily (e.g., during UI interactions)."""
+        self.listener_paused = True
+        print("Mouse listener paused")
+    
+    def resume_listener(self) -> None:
+        """Resume the mouse listener after being paused."""
+        self.listener_paused = False
+        print("Mouse listener resumed")
+    
+    def set_control_panel_rect(self, x: int, y: int, width: int, height: int) -> None:
+        """
+        Set the control panel bounding box for click filtering.
+        
+        Args:
+            x: Control panel x position
+            y: Control panel y position
+            width: Control panel width
+            height: Control panel height
+        """
+        self.control_panel_rect = (x, y, width, height)
+        print(f"Control panel bounds set: ({x}, {y}, {width}, {height})")
         
     def _load_settings(self) -> dict:
         """Load settings from JSON file."""
@@ -75,18 +107,26 @@ class Recorder(QObject):
             self.is_recording = True
             self.step_counter = 0
             
-            # Create session folder for screenshots
+            # Create session folder for screenshots in local temp_sessions
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self.session_folder = os.path.join(
+                self.base_dir,
                 "temp_sessions",
                 f"session_{session.session_id}_{timestamp}"
             )
             os.makedirs(self.session_folder, exist_ok=True)
             
-            # DISABLED: Auto-capture on click to prevent navigation issues
-            # Mouse listener is NOT started - only manual capture available
-            # This prevents thread-safety issues and app disappearance
-            print("Recording started - Manual capture only (F8 or Highlight button)")
+            # Start mouse listener for auto-capture on click (SILENT MODE)
+            if self.settings.get("auto_capture_on_click", True):
+                try:
+                    self.mouse_listener = mouse.Listener(on_click=self._on_click)
+                    self.mouse_listener.start()
+                    print("Recording started - Silent auto-capture enabled")
+                except Exception as e:
+                    print(f"Warning: Failed to start mouse listener: {e}")
+                    print("Recording started - Manual capture only (F8 or Highlight button)")
+            else:
+                print("Recording started - Manual capture only (F8 or Highlight button)")
             
             return True
             
@@ -125,7 +165,8 @@ class Recorder(QObject):
     
     def _on_click(self, x: int, y: int, button, pressed: bool) -> None:
         """
-        Mouse click event handler.
+        Mouse click event handler (runs in pynput thread).
+        Emits thread-safe signal to main thread.
         
         Args:
             x: Click x coordinate
@@ -141,15 +182,37 @@ class Recorder(QObject):
         if not self.is_recording:
             return
         
+        # Skip if listener is paused (during UI interactions)
+        if self.listener_paused:
+            return
+        
+        # Filter out clicks on control panel
+        if self.control_panel_rect is not None:
+            cp_x, cp_y, cp_w, cp_h = self.control_panel_rect
+            if cp_x <= x <= cp_x + cp_w and cp_y <= y <= cp_y + cp_h:
+                print(f"Ignored click on control panel at ({x}, {y})")
+                return
+        
         # Apply capture delay to avoid duplicate captures
         current_time = time.time() * 1000  # Convert to ms
         delay = self.settings.get("capture_delay_ms", 200)
         if current_time - self.last_capture_time < delay:
             return
         
-        self._perform_capture(x, y, is_manual=False)
+        # Emit signal to main thread (THREAD-SAFE)
+        self.click_detected.emit(x, y)
     
-    def _perform_capture(self, x: int, y: int, is_manual: bool = False) -> None:
+    def _handle_click_on_main_thread(self, x: int, y: int) -> None:
+        """
+        Handle click event on main GUI thread (SILENT - NO POPUPS).
+        
+        Args:
+            x: Click x coordinate
+            y: Click y coordinate
+        """
+        self._perform_capture(x, y, is_manual=False, silent=True)
+    
+    def _perform_capture(self, x: int, y: int, is_manual: bool = False, silent: bool = False) -> None:
         """
         Perform screen capture and create TestStep.
         
@@ -157,13 +220,19 @@ class Recorder(QObject):
             x: Click x coordinate (0 if manual)
             y: Click y coordinate (0 if manual)
             is_manual: True if triggered by hotkey, False if auto-capture
+            silent: True for silent auto-capture (no step emission to highlighter)
         """
         try:
             # Capture screenshot
             screenshot = self._capture_screen()
             if not screenshot:
-                self.error_occurred.emit("Failed to capture screenshot")
+                if not silent:
+                    self.error_occurred.emit("Failed to capture screenshot")
                 return
+            
+            # Overlay cursor for auto-capture clicks
+            if not is_manual and x > 0 and y > 0:
+                screenshot = self._overlay_cursor(screenshot, x, y)
             
             # Get active window title
             window_title = self._get_active_window_title()
@@ -171,33 +240,54 @@ class Recorder(QObject):
             # Increment step counter
             self.step_counter += 1
             
-            # Save raw screenshot
+            # Save screenshot with cursor overlay
             screenshot_filename = f"step_{self.step_counter:03d}.png"
             screenshot_path = os.path.join(self.session_folder, screenshot_filename)
             screenshot.save(screenshot_path)
+            
+            # For auto-capture: also save as annotated (no additional annotation needed)
+            if not is_manual and silent:
+                annotated_filename = f"step_{self.step_counter:03d}_annotated.png"
+                annotated_path = os.path.join(self.session_folder, annotated_filename)
+                screenshot.save(annotated_path)
+            else:
+                annotated_path = ""
             
             # Create TestStep object
             step = TestStep(
                 step_number=self.step_counter,
                 timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 screenshot_path=screenshot_path,
-                annotated_path="",  # Will be set after annotation
+                annotated_path=annotated_path,  # Auto-capture has annotated path immediately
                 highlight_rect={},
                 active_window=window_title,
                 click_position={"x": x, "y": y} if not is_manual else {},
-                description="",
-                result="Untested"
+                description=f"Mouse Click at ({x}, {y})" if silent else "",
+                result="Pass" if silent else "Untested"
             )
             
             # Update last capture time
             self.last_capture_time = time.time() * 1000
             
-            # Emit signal with captured step (screenshot PIL Image attached)
-            step._raw_image = screenshot  # Temporary attribute for highlighter
-            self.step_captured.emit(step)
+            if silent:
+                # SILENT MODE: Add step directly to session (NO POPUP, NO HIGHLIGHTER)
+                if self.session:
+                    self.session.add_step(step)
+                    print(f"✓ Auto-captured: Step {self.step_counter} at ({x}, {y})")
+                    print(f"  Window: {window_title}")
+                    print(f"  Total steps in session: {len(self.session.steps)}")
+                else:
+                    print(f"ERROR: No active session to add step to!")
+            else:
+                # MANUAL MODE: Emit signal to show highlighter for annotation
+                step._raw_image = screenshot  # Temporary attribute for highlighter
+                self.step_captured.emit(step)
             
         except Exception as e:
-            self.error_occurred.emit(f"Capture error: {str(e)}")
+            if not silent:
+                self.error_occurred.emit(f"Capture error: {str(e)}")
+            else:
+                print(f"Auto-capture error: {e}")
     
     def _capture_screen(self) -> Optional[Image.Image]:
         """
@@ -223,6 +313,89 @@ class Recorder(QObject):
         except Exception as e:
             print(f"Screenshot capture failed: {e}")
             return None
+    
+    def _create_cursor_image(self) -> Image.Image:
+        """
+        Create a simple mouse cursor arrow image.
+        
+        Returns:
+            PIL Image of cursor (transparent background)
+        """
+        try:
+            # Create a 24x24 transparent image for cursor
+            cursor = Image.new('RGBA', (24, 24), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(cursor)
+            
+            # Draw a simple white arrow pointer with black outline
+            arrow_points = [
+                (4, 4),   # Top
+                (4, 18),  # Bottom of shaft
+                (8, 14),  # Inner bottom left
+                (12, 20), # Outer point
+                (14, 18), # Inner point
+                (10, 12), # Inner top right
+                (18, 12), # Outer right
+                (4, 4)    # Back to top
+            ]
+            
+            # Draw black outline
+            draw.polygon(arrow_points, fill=(0, 0, 0, 255), outline=(0, 0, 0, 255))
+            
+            # Draw white fill (slightly smaller)
+            arrow_fill = [
+                (5, 5),
+                (5, 17),
+                (8, 14),
+                (11, 19),
+                (13, 17),
+                (10, 12),
+                (17, 12),
+                (5, 5)
+            ]
+            draw.polygon(arrow_fill, fill=(255, 255, 255, 255))
+            
+            return cursor
+            
+        except Exception as e:
+            print(f"Failed to create cursor image: {e}")
+            # Return a simple fallback cursor
+            cursor = Image.new('RGBA', (10, 10), (255, 255, 255, 200))
+            return cursor
+    
+    def _overlay_cursor(self, screenshot: Image.Image, x: int, y: int) -> Image.Image:
+        """
+        Overlay cursor image at click coordinates.
+        
+        Args:
+            screenshot: Base screenshot image
+            x: Click x coordinate
+            y: Click y coordinate
+            
+        Returns:
+            Screenshot with cursor overlaid
+        """
+        try:
+            # Create a copy to avoid modifying original
+            result = screenshot.copy()
+            
+            # Paste cursor at click position (offset to align cursor tip)
+            cursor_x = x - 4
+            cursor_y = y - 4
+            
+            # Ensure cursor stays within image bounds
+            if cursor_x < 0:
+                cursor_x = 0
+            if cursor_y < 0:
+                cursor_y = 0
+            
+            # Paste cursor with alpha channel for transparency
+            result.paste(self.cursor_image, (cursor_x, cursor_y), self.cursor_image)
+            
+            return result
+            
+        except Exception as e:
+            print(f"Failed to overlay cursor: {e}")
+            return screenshot
     
     def _get_active_window_title(self) -> str:
         """

@@ -1,6 +1,6 @@
 {
   "output_dir": null,
-  "auto_capture_on_click": false,
+  "auto_capture_on_click": true,
   "capture_delay_ms": 200,
   "hotkey_capture": "F8",
   "hotkey_stop": "F9",

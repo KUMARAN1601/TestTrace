@@ -9,8 +9,16 @@ import os
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt
 
+# Determine base directory (works for both script and PyInstaller .exe)
+if getattr(sys, 'frozen', False):
+    # Running as compiled executable
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    # Running as script
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
 
 from ui.main_window import MainWindow
 
@@ -174,10 +182,10 @@ def check_dependencies() -> tuple:
 def create_required_directories() -> None:
     """Create required application directories if they don't exist."""
     directories = [
-        'config',
-        'output',
-        'temp_sessions',
-        'assets'
+        os.path.join(BASE_DIR, 'config'),
+        os.path.join(BASE_DIR, 'output'),
+        os.path.join(BASE_DIR, 'temp_sessions'),
+        os.path.join(BASE_DIR, 'assets')
     ]
     
     for directory in directories:
@@ -223,7 +231,7 @@ def main():
     
     # Create and show main window
     try:
-        main_window = MainWindow()
+        main_window = MainWindow(base_dir=BASE_DIR)
         
         # Show welcome message
         from PyQt5.QtWidgets import QSystemTrayIcon

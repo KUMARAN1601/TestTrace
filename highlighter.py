@@ -199,8 +199,14 @@ class Highlighter(QDialog):
     confirmed = pyqtSignal(TestStep)
     skipped = pyqtSignal()
     
-    def __init__(self, parent=None):
-        """Initialize highlighter dialog."""
+    def __init__(self, parent=None, base_dir: str = None):
+        """
+        Initialize highlighter dialog.
+        
+        Args:
+            parent: Parent widget
+            base_dir: Base directory for the application (for .exe support)
+        """
         super().__init__(parent)
         self.setWindowFlags(
             Qt.WindowStaysOnTopHint | 
@@ -208,6 +214,9 @@ class Highlighter(QDialog):
             Qt.Dialog
         )
         self.setModal(True)
+        
+        # Store base directory
+        self.base_dir = base_dir or os.path.dirname(os.path.abspath(__file__))
         
         self.step: Optional[TestStep] = None
         self.screenshot: Optional[Image.Image] = None
@@ -384,8 +393,12 @@ class Highlighter(QDialog):
             # Create new step number
             step_number = len(self.current_session.steps) + 1
             
-            # Create temp session directory
-            session_dir = f"./temp_sessions/session_{self.current_session.session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # Create temp session directory in local temp_sessions folder
+            session_dir = os.path.join(
+                self.base_dir,
+                "temp_sessions",
+                f"session_{self.current_session.session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
             os.makedirs(session_dir, exist_ok=True)
             
             # Save original screenshot
