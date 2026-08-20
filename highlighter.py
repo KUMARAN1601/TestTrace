@@ -26,6 +26,7 @@ class HighlightNamingDialog(QDialog):
         self.setFixedWidth(600)
         
         self.description = ""
+        self.result = "Pass"  # Default result
         self.reselect_requested = False
         
         self._setup_ui()
@@ -52,6 +53,46 @@ class HighlightNamingDialog(QDialog):
             }
         """)
         layout.addWidget(self.description_input)
+        
+        layout.addSpacing(10)
+        
+        # Result dropdown
+        result_row = QHBoxLayout()
+        result_label = QLabel("Result:")
+        result_label.setStyleSheet("font-size: 10pt; font-weight: bold;")
+        result_row.addWidget(result_label)
+        
+        self.result_combo = QComboBox()
+        self.result_combo.addItems(["Pass", "Fail", "Blocked"])
+        self.result_combo.setStyleSheet("""
+            QComboBox {
+                background-color: white;
+                color: black;
+                border: 2px solid #2563EB;
+                border-radius: 6px;
+                padding: 8px;
+                font-size: 10pt;
+                min-width: 120px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #2563EB;
+            }
+            QComboBox QAbstractItemView {
+                background-color: white;
+                color: black;
+                selection-background-color: #2563EB;
+                selection-color: white;
+            }
+        """)
+        result_row.addWidget(self.result_combo)
+        result_row.addStretch()
+        layout.addLayout(result_row)
         
         layout.addSpacing(10)
         
@@ -139,6 +180,7 @@ class HighlightNamingDialog(QDialog):
             self.description_input.setPlaceholderText("Description is required!")
             return
         
+        self.result = self.result_combo.currentText()
         self.reselect_requested = False
         self.accept()
     
@@ -146,6 +188,7 @@ class HighlightNamingDialog(QDialog):
         """Get dialog result."""
         return {
             "description": self.description,
+            "result": self.result,
             "reselect": self.reselect_requested
         }
 
@@ -191,9 +234,9 @@ class Highlighter(QDialog):
         # Image display area (handled by paintEvent)
         # Takes up most of the screen
         
-        # Bottom control panel
-        control_panel = QWidget()
-        control_panel.setStyleSheet("""
+        # Bottom control panel (ONLY for F8 captures, hidden for Highlight button)
+        self.control_panel = QWidget()
+        self.control_panel.setStyleSheet("""
             QWidget {
                 background-color: #1B2333;
                 border-top: 2px solid #2563EB;
@@ -247,7 +290,7 @@ class Highlighter(QDialog):
             }
         """)
         
-        panel_layout = QHBoxLayout(control_panel)
+        panel_layout = QHBoxLayout(self.control_panel)
         panel_layout.setContentsMargins(20, 15, 20, 15)
         
         # Instructions label
@@ -290,12 +333,13 @@ class Highlighter(QDialog):
         
         # Add control panel to main layout (at bottom)
         main_layout.addStretch()
-        main_layout.addWidget(control_panel)
+        main_layout.addWidget(self.control_panel)
     
     def show_for_manual_highlight(self, session) -> None:
         """
         Show highlighter in manual mode - captures screen and allows highlighting.
         ONLY TRIGGERED BY EXPLICIT "Highlight" BUTTON CLICK.
+        Uses center popup dialog ONLY (no bottom toolbar).
         
         Args:
             session: Current TestSession to add the step to
@@ -317,6 +361,9 @@ class Highlighter(QDialog):
             self.is_drawing = False
             self.drawing_locked = False  # Allow drawing of ONE rectangle
             
+            # HIDE bottom control panel - use center dialog only
+            self.control_panel.hide()
+            
             # Show fullscreen using show() + window state instead of showFullScreen()
             self.setWindowState(Qt.WindowFullScreen)
             self.show()
@@ -328,7 +375,7 @@ class Highlighter(QDialog):
             import traceback
             traceback.print_exc()
     
-    def _save_manual_highlight(self, description: str) -> None:
+    def _save_manual_highlight(self, description: str, result: str = "Pass") -> None:
         """Save the manually highlighted evidence as a test step."""
         if not self.current_session or not self.screenshot:
             return
@@ -377,7 +424,7 @@ class Highlighter(QDialog):
                 highlight_rect={"x": x, "y": y, "w": w, "h": h},
                 active_window="Manual Highlight",
                 description=description,
-                result="Pass"
+                result=result  # Use result from naming dialog
             )
             
             # Emit confirmed signal - main_window will add step to session
@@ -408,8 +455,8 @@ class Highlighter(QDialog):
                     self.end_point = QPoint()
                     self.update()
                 else:
-                    # Save the highlight
-                    self._save_manual_highlight(result_data["description"])
+                    # Save the highlight with description and result
+                    self._save_manual_highlight(result_data["description"], result_data.get("result", "Pass"))
             else:
                 # User cancelled - close highlighter safely
                 self.hide()
@@ -422,7 +469,8 @@ class Highlighter(QDialog):
     
     def show_step(self, step: TestStep) -> None:
         """
-        Display highlighter for a captured step.
+        Display highlighter for a captured step (F8 manual capture).
+        Shows bottom toolbar for annotation.
         
         Args:
             step: TestStep with raw screenshot attached as _raw_image
@@ -455,18 +503,8 @@ class Highlighter(QDialog):
         self.description_input.clear()
         self.result_combo.setCurrentIndex(0)
         
-        # Show fullscreen using show() + window state instead of showFullScreen()
-        self.setWindowState(Qt.WindowFullScreen)
-        self.show()
-        self.raise_()
-        self.activateWindow()
-        self.description_input.setFocus()
-        self.start_point = QPoint()
-        self.end_point = QPoint()
-        
-        # Reset inputs
-        self.description_input.clear()
-        self.result_combo.setCurrentIndex(0)
+        # SHOW bottom control panel for F8 captures
+        self.control_panel.show()
         
         # Show fullscreen using show() + window state instead of showFullScreen()
         self.setWindowState(Qt.WindowFullScreen)
